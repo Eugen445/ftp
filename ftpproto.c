@@ -30,6 +30,7 @@ static void do_rnfr(session_t *sess);
 static void do_rnto(session_t *sess);
 static void do_retr(session_t *sess);
 static void do_stor(session_t *sess);
+static void do_rest(session_t *sess);
 
 //命令映射
 typedef struct ftpcmd
@@ -57,14 +58,15 @@ ftpcmd_t ctrl_cmds[] =
 	{"RNFR", do_rnfr},
 	{"RNTO", do_rnto},
 	{"RETR", do_retr},
-	{"STOR", do_stor}
+	{"STOR", do_stor},
+	{"REST", do_rest}
 };
 
 //ftp 服务进程
 void handle_child(session_t *sess)
 {
 	//send(sess->ctrl_fd, "220 (miniftp 1.0.1)\r\n", strlen("220 (miniftp 1.0.1)\r\n"), 0);
-	ftp_reply(sess, FTP_GREET, "(bit86 miniftp 1.0.1)");
+	ftp_reply(sess, FTP_GREET, "(miniftp 1.0.1)");
 	while(1)
 	{
 		//不停的等待客户端的命令并做出处理
@@ -392,7 +394,6 @@ static void do_list(session_t *sess)
 	sess->data_fd = -1;
 }
 
-//
 static void do_cwd(session_t *sess)
 {
 	if(chdir(sess->arg) < 0)
@@ -401,7 +402,6 @@ static void do_cwd(session_t *sess)
 		ftp_reply(sess, FTP_CWDOK, "Directory successfully changed.");
 }
 
-//创建文件
 static void do_mkd(session_t *sess)
 {
 	if(mkdir(sess->arg, 0755) < 0)
@@ -538,6 +538,15 @@ static void do_stor(session_t *sess)
 	//回复150
 	ftp_reply(sess, FTP_DATACONN, "Ok to send data.");
 
+	//断点续传
+	unsigned long long offset = sess->restart_pos;
+	sess->restart_pos = 0;
+	if(lseek(fd, offset, SEEK_SET) < 0) //移动到文件读写位置
+	{
+		ftp_reply(sess, FTP_UPLOADFAIL, "Could not create file.");
+		return;
+	}
+
 	//传输数据
 	char buf[MAX_BUFFER_SIZE] = {0};
 	while(1)
@@ -563,4 +572,14 @@ static void do_stor(session_t *sess)
 		close(sess->data_fd);
 		sess->data_fd = -1;
 	}
+}
+
+//断点续传或续载
+static void do_rest(session_t *sess)
+{
+	sess->restart_pos = (unsigned long long)atoll(sess->arg);
+	//350 Restart position accepted (3465248768).
+	char text[MAX_BUFFER_SIZE] = {0};
+	sprintf(text, "Restart position accepted (%lld).", sess->restart_pos);
+	ftp_reply(sess, FTP_RESTOK, text);
 }
